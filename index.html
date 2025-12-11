@@ -82,6 +82,14 @@
       border-color: #74de7a;
     }
 
+    .square.x-mark {
+      color: #4fd4ff;
+    }
+
+    .square.o-mark {
+      color: #ff5c7d;
+    }
+
     .controls {
       margin-top: 22px;
       display: flex;
@@ -118,12 +126,17 @@
 
     .score-row .round-status {
       text-align: center;
-      color: #ffd26a;
+      color: #ffffff;
       font-size: 16px;
+    }
+
+    .score-row .score-label:first-child {
+      color: #48cfff;
     }
 
     .score-row .align-right {
       text-align: right;
+      color: #ff5a7c;
     }
 
     .cards {
@@ -147,13 +160,13 @@
     }
 
     .card-panel[data-panel-owner="human"] {
-      border-color: rgba(43, 168, 74, 0.35);
-      background: rgba(22, 40, 30, 0.85);
+      border-color: rgba(64, 216, 255, 0.45);
+      background: rgba(16, 46, 62, 0.9);
     }
 
     .card-panel[data-panel-owner="human"].selectable {
-      border-color: #2ba84a;
-      box-shadow: 0 0 12px rgba(43, 168, 74, 0.55);
+      border-color: #40d8ff;
+      box-shadow: 0 0 12px rgba(64, 216, 255, 0.55);
     }
 
     .card-panel[data-panel-owner="ai"] {
@@ -197,17 +210,17 @@
     }
 
     .card.selected {
-      border-color: #2ba84a;
-      box-shadow: 0 0 12px rgba(43, 168, 74, 0.5);
+      border-color: #33c8ff;
+      box-shadow: 0 0 12px rgba(51, 200, 255, 0.5);
     }
 
     .card-panel[data-panel-owner="human"] .card {
-      background: rgba(12, 28, 20, 0.95);
-      border-color: rgba(43, 168, 74, 0.35);
+      background: rgba(7, 34, 48, 0.95);
+      border-color: rgba(64, 216, 255, 0.35);
     }
 
     .card-panel[data-panel-owner="human"] .card:hover {
-      border-color: #2ba84a;
+      border-color: #40d8ff;
     }
 
     .card-panel[data-panel-owner="ai"] .card {
@@ -313,10 +326,10 @@
 
     @keyframes shake {
       0% { transform: translate(0, 0); }
-      20% { transform: translate(-8px, 4px); }
-      40% { transform: translate(8px, -4px); }
-      60% { transform: translate(-6px, 2px); }
-      80% { transform: translate(6px, -2px); }
+      20% { transform: translate(-4.8px, 2.4px); }
+      40% { transform: translate(4.8px, -2.4px); }
+      60% { transform: translate(-3.6px, 1.2px); }
+      80% { transform: translate(3.6px, -1.2px); }
       100% { transform: translate(0, 0); }
     }
 
@@ -436,9 +449,9 @@
 
     @keyframes ambushShake {
       0% { transform: translate(0px, 0px); }
-      25% { transform: translate(-4px, 3px); }
-      50% { transform: translate(4px, -3px); }
-      75% { transform: translate(-3px, 2px); }
+      25% { transform: translate(-2.4px, 1.8px); }
+      50% { transform: translate(2.4px, -1.8px); }
+      75% { transform: translate(-1.8px, 1.2px); }
       100% { transform: translate(0px, 0px); }
     }
 
@@ -448,9 +461,9 @@
 
     @keyframes chainShake {
       0% { transform: translate(0, 0); }
-      25% { transform: translate(5px, -4px); }
-      50% { transform: translate(-5px, 3px); }
-      75% { transform: translate(4px, 4px); }
+      25% { transform: translate(3px, -2.4px); }
+      50% { transform: translate(-3px, 1.8px); }
+      75% { transform: translate(2.4px, 2.4px); }
       100% { transform: translate(0, 0); }
     }
 
@@ -561,6 +574,7 @@
       { id: 'null-bloom', name: 'Null Bloom', description: 'Spreads a pair of void tiles at the start.', effect: 'doubleVoid' },
       { id: 'purify-sigil', name: 'Purify Sigil', description: 'Cleanses a random cursed tile right now.', effect: 'cleanseTile' },
       { id: 'emma-bloom', name: 'Emma Bloom', description: 'Pick one of your tiles; all adjacent tiles become yours.', effect: 'emmaBloom' },
+      { id: 'switcharoo', name: 'Switcharoo', description: 'Tap any letter to swap it to the other team.', effect: 'switcharoo' },
       { id: 'shatter-rune', name: 'Shatter Rune', description: 'Click an enemy tile to erase it this turn.', effect: 'destroyTile' },
       { id: 'ruin-pulse', name: 'Ruin Pulse', description: 'Charge a pulse that destroys one enemy tile.', effect: 'destroyTile' },
       { id: 'cataclysm-weave', name: 'Cataclysm Weave', description: 'Detonate a tile to erase every connected enemy letter.', effect: 'destroyConnected' },
@@ -620,7 +634,8 @@
         ready: false,
         ambushAvailable: false,
         ambushArming: false,
-        emmaBloomArming: false
+        emmaBloomArming: false,
+        switcharooActive: false
       };
     }
 
@@ -648,6 +663,20 @@
       });
     }
 
+    function applyTileMark(tile, symbol) {
+      if (!tile) return;
+      tile.classList.remove('x-mark', 'o-mark');
+      if (symbol === HUMAN) {
+        tile.classList.add('x-mark');
+      } else if (symbol === AI) {
+        tile.classList.add('o-mark');
+      }
+    }
+
+    function clearTileMark(tile) {
+      tile?.classList?.remove('x-mark', 'o-mark');
+    }
+
     function handleMove(event) {
       const idx = Number(event.currentTarget.dataset.index);
       if (gameOver || currentPlayer !== HUMAN || waitingForAI) return;
@@ -659,6 +688,11 @@
       if (playerState[HUMAN].emmaBloomArming) {
         attemptEmmaBloomSelection(HUMAN, idx);
         return;
+      }
+      if (playerState[HUMAN].switcharooActive) {
+        if (attemptSwitcharooSelection(HUMAN, idx)) {
+          return;
+        }
       }
       if (!playerState[HUMAN].ready) return;
 
@@ -868,6 +902,7 @@
       if (tile) {
         clearTilePreviewState(idx);
         tile.textContent = player;
+        applyTileMark(tile, player);
       }
     }
 
@@ -936,6 +971,7 @@
         btn.textContent = '';
         btn.disabled = false;
         btn.classList.remove('win', 'blocked', 'mystery', 'ambush');
+        clearTileMark(btn);
       });
 
       updateScoreDisplay();
@@ -1138,8 +1174,18 @@
     }
 
     function drawCard() {
-      const index = Math.floor(Math.random() * cardPool.length);
-      return cardPool[index];
+      const available = cardPool.filter(card => isCardAvailable(card));
+      const pool = available.length ? available : cardPool;
+      const index = Math.floor(Math.random() * pool.length);
+      return pool[index];
+    }
+
+    function isCardAvailable(card) {
+      if (!card) return false;
+      if (card.effect === 'emmaBloom' && currentRound < 4) {
+        return false;
+      }
+      return true;
     }
 
     function renderCardChoices(player) {
@@ -1198,6 +1244,7 @@
         state.destroyMode = 'single';
       }
       state.destroyUsed = false;
+      state.switcharooActive = false;
 
       const turnConsumedByCard = card.effect === 'voidTile' || card.effect === 'doubleVoid';
       const effectOutcome = applyCardEffect(player, card);
@@ -1308,6 +1355,8 @@
           return CARD_FLOW.CONTINUE;
         case 'emmaBloom':
           return triggerEmmaBloom(player);
+        case 'switcharoo':
+          return triggerSwitcharoo(player);
         case 'ambushTrap':
           prepareAmbushTrap(player);
           return CARD_FLOW.PENDING;
@@ -1391,7 +1440,7 @@
 
     function executeEmmaBloom(player, originIdx) {
       convertTileToPlayer(originIdx, player);
-      const neighbors = getNeighborIndices(originIdx);
+      const neighbors = getEmmaBloomNeighbors(originIdx);
       neighbors.forEach(neighbor => convertTileToPlayer(neighbor, player));
       statusElement.textContent = `${playerLabel(player)}'s Emma Bloom overtakes nearby tiles!`;
       evaluateBoardStateAfterAuto();
@@ -1409,6 +1458,7 @@
         btn.textContent = player;
         btn.disabled = false;
         btn.classList.remove('win', 'blocked', 'mystery');
+        applyTileMark(btn, player);
       }
     }
 
@@ -1436,6 +1486,91 @@
       return bestIdx;
     }
 
+    function triggerSwitcharoo(player) {
+      const state = playerState[player];
+      if (!state) return CARD_FLOW.CONTINUE;
+      state.switcharooActive = false;
+      const candidates = getSwitcharooCandidates();
+      if (!candidates.length) {
+        statusElement.textContent = 'Switcharoo finds no letters to flip.';
+        return CARD_FLOW.CONTINUE;
+      }
+      if (player === HUMAN) {
+        state.switcharooActive = true;
+        state.ready = false;
+        statusElement.textContent = 'Select any letter to flip with Switcharoo.';
+        return CARD_FLOW.PENDING;
+      }
+      const target = chooseSwitcharooTarget(player, candidates);
+      if (target === -1) {
+        statusElement.textContent = 'Switcharoo fizzles with no valid tile.';
+        return CARD_FLOW.CONTINUE;
+      }
+      flipTileSymbol(target);
+      statusElement.textContent = 'AI flips a letter with Switcharoo!';
+      evaluateBoardStateAfterAuto();
+      return CARD_FLOW.CONSUME;
+    }
+
+    function attemptSwitcharooSelection(player, idx) {
+      const state = playerState[player];
+      if (!state?.switcharooActive) return false;
+      state.switcharooActive = false;
+      if (!isValidSwitcharooTarget(idx)) {
+        statusElement.textContent = 'Switcharoo fizzles on that tile.';
+      } else {
+        flipTileSymbol(idx);
+        statusElement.textContent = `${playerLabel(player)} flips a letter with Switcharoo!`;
+        evaluateBoardStateAfterAuto();
+      }
+      if (!gameOver) {
+        processTurnResult(player);
+      }
+      return true;
+    }
+
+    function isValidSwitcharooTarget(idx) {
+      if (idx < 0 || idx >= board.length) return false;
+      if (isAmbushMarked(idx)) return false;
+      const cell = board[idx];
+      if (cell !== HUMAN && cell !== AI) return false;
+      return true;
+    }
+
+    function getSwitcharooCandidates() {
+      return board
+        .map((cell, idx) => {
+          if (cell !== HUMAN && cell !== AI) return null;
+          if (isAmbushMarked(idx) || cell === 'BLOCK') return null;
+          return idx;
+        })
+        .filter(idx => idx !== null);
+    }
+
+    function chooseSwitcharooTarget(player, candidates) {
+      if (!candidates?.length) return -1;
+      const opponent = player === HUMAN ? AI : HUMAN;
+      const opponentTiles = candidates.filter(idx => board[idx] === opponent);
+      if (opponentTiles.length) {
+        return opponentTiles[Math.floor(Math.random() * opponentTiles.length)];
+      }
+      return candidates[Math.floor(Math.random() * candidates.length)];
+    }
+
+    function flipTileSymbol(idx) {
+      const current = board[idx];
+      if (current !== HUMAN && current !== AI) return false;
+      const next = current === HUMAN ? AI : HUMAN;
+      board[idx] = next;
+      const tile = boardElement.children[idx];
+      if (tile) {
+        tile.textContent = next;
+        tile.classList.remove('win', 'blocked', 'mystery');
+        applyTileMark(tile, next);
+      }
+      return true;
+    }
+
     function corruptTile() {
       const idx = getRandomEmptyIndex({ allowMystery: false });
       if (idx === -1) {
@@ -1454,6 +1589,7 @@
         btn.textContent = '#';
         btn.disabled = true;
         btn.classList.add('blocked');
+        clearTileMark(btn);
       }
     }
 
@@ -1469,6 +1605,7 @@
         btn.textContent = '';
         btn.disabled = false;
         btn.classList.remove('blocked');
+        clearTileMark(btn);
       }
     }
 
@@ -1500,6 +1637,7 @@
           btn.textContent = '';
           btn.disabled = false;
           btn.classList.remove('win', 'blocked');
+          clearTileMark(btn);
         }
         clearAmbushAt(targetIdx);
       });
@@ -1637,6 +1775,22 @@
       return neighbors;
     }
 
+    function getEmmaBloomNeighbors(idx) {
+      const neighbors = [];
+      const row = Math.floor(idx / boardSize);
+      const col = idx % boardSize;
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          if (dr === 0 && dc === 0) continue;
+          const nr = row + dr;
+          const nc = col + dc;
+          if (nr < 0 || nr >= boardSize || nc < 0 || nc >= boardSize) continue;
+          neighbors.push(nr * boardSize + nc);
+        }
+      }
+      return neighbors;
+    }
+
     function getAmbushOwner(idx) {
       return ambushTraps.get(idx);
     }
@@ -1708,6 +1862,7 @@
           cell.textContent = '';
           cell.disabled = false;
           cell.classList.remove('win', 'blocked');
+          clearTileMark(cell);
         }
         clearAmbushAt(target);
       });
@@ -1738,6 +1893,8 @@
           return 'Curses unleashed! Passing turn...';
         case 'emmaBloom':
           return `${playerLabel(player)}'s Emma Bloom reshapes the battlefield.`;
+        case 'switcharoo':
+          return `${playerLabel(player)}'s Switcharoo resolves. Passing turn...`;
         default:
           return `${playerLabel(player)} completes ${card.name}. Passing turn...`;
       }
@@ -2042,6 +2199,7 @@
         clearTilePreviewState(idx);
         tile.textContent = symbol;
         tile.classList.remove('mystery');
+        applyTileMark(tile, symbol);
       }
       statusElement.textContent = `${playerLabel(player)} gambled on the mystery tile... It reveals ${symbol}!`;
       return true;
