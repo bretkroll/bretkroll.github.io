@@ -66,6 +66,8 @@
       border-radius: 12px;
       cursor: pointer;
       transition: transform 100ms ease, background 100ms ease;
+      position: relative;
+      overflow: hidden;
     }
 
     button.square:disabled {
@@ -88,6 +90,24 @@
 
     .square.o-mark {
       color: #ff5c7d;
+    }
+
+    .fade-letter {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 1em;
+      font-weight: inherit;
+      line-height: 1;
+      color: inherit;
+      pointer-events: none;
+      animation: letterFade var(--fade-duration, 2000ms) forwards;
+    }
+
+    @keyframes letterFade {
+      from { opacity: 1; }
+      to { opacity: 0; }
     }
 
     .controls {
@@ -677,6 +697,25 @@
       tile?.classList?.remove('x-mark', 'o-mark');
     }
 
+    function removeTileFadeOverlay(tile) {
+      if (!tile) return;
+      tile.querySelectorAll('.fade-letter').forEach(el => el.remove());
+    }
+
+    function animateLetterFade(tile, symbol, duration = 2000) {
+      if (!tile || !(symbol === HUMAN || symbol === AI)) return;
+      removeTileFadeOverlay(tile);
+      const overlay = document.createElement('span');
+      overlay.className = 'fade-letter';
+      overlay.style.setProperty('--fade-duration', `${duration}ms`);
+      overlay.style.color = symbol === HUMAN ? '#4fd4ff' : '#ff5c7d';
+      overlay.textContent = symbol;
+      tile.appendChild(overlay);
+      setTimeout(() => {
+        overlay.remove();
+      }, duration);
+    }
+
     function handleMove(event) {
       const idx = Number(event.currentTarget.dataset.index);
       if (gameOver || currentPlayer !== HUMAN || waitingForAI) return;
@@ -900,6 +939,7 @@
       board[idx] = player;
       const tile = boardElement.children[idx];
       if (tile) {
+        removeTileFadeOverlay(tile);
         clearTilePreviewState(idx);
         tile.textContent = player;
         applyTileMark(tile, player);
@@ -971,6 +1011,7 @@
         btn.textContent = '';
         btn.disabled = false;
         btn.classList.remove('win', 'blocked', 'mystery', 'ambush');
+        removeTileFadeOverlay(btn);
         clearTileMark(btn);
       });
 
@@ -1454,6 +1495,7 @@
       clearAmbushAt(idx);
       const btn = boardElement.children[idx];
       if (btn) {
+        removeTileFadeOverlay(btn);
         clearTilePreviewState(idx);
         btn.textContent = player;
         btn.disabled = false;
@@ -1564,6 +1606,7 @@
       board[idx] = next;
       const tile = boardElement.children[idx];
       if (tile) {
+        removeTileFadeOverlay(tile);
         tile.textContent = next;
         tile.classList.remove('win', 'blocked', 'mystery');
         applyTileMark(tile, next);
@@ -1586,6 +1629,7 @@
       clearTilePreviewState(idx);
       const btn = boardElement.children[idx];
       if (btn) {
+        removeTileFadeOverlay(btn);
         btn.textContent = '#';
         btn.disabled = true;
         btn.classList.add('blocked');
@@ -1602,6 +1646,7 @@
       board[idx] = '';
       const btn = boardElement.children[idx];
       if (btn) {
+        removeTileFadeOverlay(btn);
         btn.textContent = '';
         btn.disabled = false;
         btn.classList.remove('blocked');
@@ -1634,6 +1679,7 @@
         board[targetIdx] = '';
         const btn = boardElement.children[targetIdx];
         if (btn) {
+          removeTileFadeOverlay(btn);
           btn.textContent = '';
           btn.disabled = false;
           btn.classList.remove('win', 'blocked');
@@ -1856,13 +1902,20 @@
       }
       const cluster = getConnectedCluster(idx, victim);
       cluster.forEach(target => {
+        const removedSymbol = board[target];
         board[target] = '';
         const cell = boardElement.children[target];
         if (cell) {
-          cell.textContent = '';
           cell.disabled = false;
           cell.classList.remove('win', 'blocked');
           clearTileMark(cell);
+          removeTileFadeOverlay(cell);
+          if (removedSymbol === HUMAN || removedSymbol === AI) {
+            cell.textContent = '';
+            animateLetterFade(cell, removedSymbol);
+          } else {
+            cell.textContent = '';
+          }
         }
         clearAmbushAt(target);
       });
@@ -2196,6 +2249,7 @@
       board[idx] = symbol;
       mysteryTileIndex = -1;
       if (tile) {
+        removeTileFadeOverlay(tile);
         clearTilePreviewState(idx);
         tile.textContent = symbol;
         tile.classList.remove('mystery');
