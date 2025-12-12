@@ -943,8 +943,26 @@
       }
       if (!playerState[HUMAN].ready) return;
 
-      if (board[idx] === AI && useDestroyAbility(HUMAN, idx)) {
-        return;
+      if (board[idx] === AI) {
+        const destroyResult = useDestroyAbility(HUMAN, idx);
+        if (destroyResult === false) {
+          // Can't use destroy ability, continue with normal move
+        } else {
+          // destroyResult is the animation delay (0 for single, 2500 for chain)
+          if (destroyResult > 0) {
+            // Chain reaction (Cataclysm) - wait for animation, then switch turns
+            setTimeout(() => {
+              if (!gameOver) {
+                processTurnResult(HUMAN);
+              }
+            }, destroyResult);
+          } else {
+            // Single tile destroy (Erasure) - player can still place a mark manually
+            // Don't switch turns yet, let player place their mark
+            // The turn will switch after they place their mark
+          }
+          return;
+        }
       }
 
       const trapOwner = getAmbushOwner(idx);
@@ -994,9 +1012,6 @@
         // Ambush was activated, resolveAmbushSpring already handled turn switching
         // Just check game state again to see if game ended
         checkGameState();
-        return;
-      } else if (forcedAmbushResult === 'draw') {
-        handleDraw('Player X must play on their own ambush. Round ends in a draw.');
         return;
       }
       
@@ -1066,19 +1081,14 @@
           return null; // Not a forced move yet
         }
         
-        // If it's an opponent's ambush, force the move and activate it
-        if (ambushOwner && ambushOwner !== currentPlayer) {
+        // If there's an ambush (regardless of owner), force the move and activate it
+        if (ambushOwner) {
           if (currentPlayer === HUMAN) {
             resolveAmbushSpring(HUMAN, lastTile, ambushOwner);
           } else {
             resolveAmbushSpring(AI, lastTile, ambushOwner);
           }
           return 'activated';
-        }
-        
-        // If it's the X player's own ambush and it's the last tile, it's a draw
-        if (ambushOwner === HUMAN && currentPlayer === HUMAN) {
-          return 'draw';
         }
       }
       
@@ -1097,11 +1107,9 @@
       if (forcedAmbushResult === 'activated') {
         // Ambush was activated, check game state again after
         return checkGameState();
-      } else if (forcedAmbushResult === 'draw') {
-        handleDraw('Player X must play on their own ambush. Round ends in a draw.');
-        return true;
       }
 
+      // Only draw when all tiles are actually occupied (letters or hexes)
       if (board.every(cell => cell)) {
         handleDraw();
         return true;
@@ -1401,10 +1409,6 @@
         // Just check game state to see if game ended
         waitingForAI = false;
         checkGameState();
-        return;
-      } else if (forcedAmbushResult === 'draw') {
-        waitingForAI = false;
-        triggerForcedDraw('Player X must play on their own ambush. Round ends in a draw.');
         return;
       }
       
@@ -2095,8 +2099,7 @@
     function triggerHex(player) {
       const state = playerState[player];
       if (!state) return CARD_FLOW.CONTINUE;
-      const availableTiles = getEmptyIndices(board, { includeMystery: false })
-        .filter(idx => !isAmbushMarked(idx));
+      const availableTiles = getEmptyIndices(board, { includeMystery: false });
       if (!availableTiles.length) {
         statusElement.textContent = 'No empty tiles available to hex.';
         return CARD_FLOW.CONTINUE;
@@ -2104,7 +2107,7 @@
       if (player === HUMAN) {
         state.hexArming = true;
         state.ready = false;
-        statusElement.textContent = 'Select an empty tile to hex.';
+        statusElement.textContent = 'Select an empty tile to hex. (Can dismantle ambush traps!)';
         return CARD_FLOW.PENDING;
       }
       const target = chooseHexTileFor(player, availableTiles);
@@ -2112,8 +2115,14 @@
         statusElement.textContent = 'Hex fizzles with no valid target.';
         return CARD_FLOW.CONTINUE;
       }
+      const hadAmbush = isAmbushMarked(target);
+      const ambushOwner = hadAmbush ? getAmbushOwner(target) : null;
       hexTile(target);
-      statusElement.textContent = 'AI hexes a tile!';
+      if (hadAmbush && ambushOwner !== player) {
+        statusElement.textContent = 'AI hexes a tile and dismantles your ambush trap!';
+      } else {
+        statusElement.textContent = 'AI hexes a tile!';
+      }
       evaluateBoardStateAfterAuto();
       return CARD_FLOW.CONTINUE;
     }
@@ -2121,16 +2130,22 @@
     function attemptHexPlacement(player, idx) {
       const state = playerState[player];
       if (!state?.hexArming) return;
-      if (board[idx] || board[idx] === 'BLOCK' || isMysteryTile(idx) || isAmbushMarked(idx)) {
+      if (board[idx] || board[idx] === 'BLOCK' || isMysteryTile(idx)) {
         statusElement.textContent = 'Choose an empty tile to hex.';
         return;
       }
       state.hexArming = false;
+      const hadAmbush = isAmbushMarked(idx);
+      const ambushOwner = hadAmbush ? getAmbushOwner(idx) : null;
       hexTile(idx);
       evaluateBoardStateAfterAuto();
       if (!gameOver) {
         state.ready = true;
-        statusElement.textContent = `${playerLabel(player)} hexes a tile! Place your mark.`;
+        if (hadAmbush && ambushOwner !== player) {
+          statusElement.textContent = `${playerLabel(player)} hexes a tile and dismantles ${playerLabel(ambushOwner)}'s ambush trap! Place your mark.`;
+        } else {
+          statusElement.textContent = `${playerLabel(player)} hexes a tile! Place your mark.`;
+        }
       }
     }
 
@@ -2154,6 +2169,7 @@
     function chooseHexTileFor(player, availableTiles) {
       if (!availableTiles.length) return -1;
       const opponent = player === HUMAN ? AI : HUMAN;
+      // AI doesn't know where opponent's ambush traps are - treat all tiles equally
       const strategicTiles = availableTiles.filter(idx => {
         const neighbors = getNeighborIndices(idx);
         return neighbors.some(neighbor => board[neighbor] === opponent);
@@ -2259,22 +2275,17 @@
 
     function updateDestroyTargetPulsation() {
       const humanState = playerState[HUMAN];
-      const aiState = playerState[AI];
       // Only pulsate for Erasure card (shatter-rune), not other destroy cards
+      // Only pulsate O tiles when human has Erasure (not for AI)
       const humanHasErasure = humanState && humanState.card && humanState.card.id === 'shatter-rune';
-      const aiHasErasure = aiState && aiState.card && aiState.card.id === 'shatter-rune';
       const humanShouldPulsate = humanHasErasure && humanState.destroyAvailable && !humanState.destroyUsed && currentPlayer === HUMAN && !gameOver;
-      const aiShouldPulsate = aiHasErasure && aiState.destroyAvailable && !aiState.destroyUsed && currentPlayer === AI && !gameOver;
       
       [...boardElement.children].forEach((tile, idx) => {
         const cell = board[idx];
         tile.classList.remove('pulsate');
         
         if (cell === AI && humanShouldPulsate) {
-          // Human has Erasure - pulsate O tiles
-          tile.classList.add('pulsate');
-        } else if (cell === HUMAN && aiShouldPulsate) {
-          // AI has Erasure - pulsate X tiles
+          // Human has Erasure - pulsate O tiles only
           tile.classList.add('pulsate');
         }
       });
@@ -2292,7 +2303,9 @@
         ? getConnectedCluster(idx, targetSymbol)
         : [idx];
       
-      if (state.destroyMode === 'chain') {
+      const isChainReaction = state.destroyMode === 'chain';
+      
+      if (isChainReaction) {
         animateCascadingCataclysm(idx, targets, targetSymbol);
         showChainReactionEffects();
       } else {
@@ -2314,12 +2327,16 @@
       if (statusOverride) {
         statusElement.textContent = statusOverride;
       } else if (player === HUMAN) {
-        const extra = state.destroyMode === 'chain' ? 'Chain collapsed!' : 'Tile erased.';
+        const extra = isChainReaction ? 'Chain collapsed!' : 'Tile erased.';
         statusElement.textContent = `Player X unleashed ${cardName}! ${extra} Place your next mark.`;
       } else {
         statusElement.textContent = `AI used ${cardName} to destroy your tiles.`;
       }
-      return true;
+      
+      // Return animation duration if chain reaction, 0 otherwise
+      // Chain reaction: TOTAL_DURATION (2500ms) for cascading + shake effect (2000ms) runs in parallel
+      // Use 2500ms to ensure all animations complete
+      return isChainReaction ? 2500 : 0;
     }
 
     function maybeAIDestroyTile() {
@@ -2327,7 +2344,7 @@
         aiCataclysmPending = false;
         return false;
       }
-      // Update pulsation to show X tiles pulsating
+      // Update pulsation state (no pulsation for AI, only for human)
       updateDestroyTargetPulsation();
       
       // Wait 1.5 seconds before destroying
@@ -2341,9 +2358,17 @@
           if (bestTarget.index !== -1 && bestTarget.size >= 2) {
             const cardName = playerState[AI].card?.name || 'an ability';
             aiCataclysmPending = false;
-            useDestroyAbility(AI, bestTarget.index, `AI unleashed ${cardName} to collapse your tiles.`);
-            if (!gameOver && currentPlayer === AI) {
-              processTurnResult(AI);
+            const destroyResult = useDestroyAbility(AI, bestTarget.index, `AI unleashed ${cardName} to collapse your tiles.`);
+            if (destroyResult !== false && !gameOver && currentPlayer === AI) {
+              if (destroyResult > 0) {
+                setTimeout(() => {
+                  if (!gameOver && currentPlayer === AI) {
+                    processTurnResult(AI);
+                  }
+                }, destroyResult);
+              } else {
+                processTurnResult(AI);
+              }
             }
             return;
           }
@@ -2355,9 +2380,17 @@
           return;
         }
         const cardName = playerState[AI].card?.name || 'an ability';
-        useDestroyAbility(AI, target, `AI activated ${cardName} to obliterate your tile.`);
-        if (!gameOver && currentPlayer === AI) {
-          processTurnResult(AI);
+        const destroyResult = useDestroyAbility(AI, target, `AI activated ${cardName} to obliterate your tile.`);
+        if (destroyResult !== false && !gameOver && currentPlayer === AI) {
+          if (destroyResult > 0) {
+            setTimeout(() => {
+              if (!gameOver && currentPlayer === AI) {
+                processTurnResult(AI);
+              }
+            }, destroyResult);
+          } else {
+            processTurnResult(AI);
+          }
         }
       }, 1500);
       return true; // Indicates destroy is pending
@@ -2683,9 +2716,12 @@
         state.ready = false;
         state.extraTurnUsed = true;
       }
-      if (!gameOver) {
-        switchTurns(victim);
-      }
+      // Wait for ambush animations to complete (shake effect lasts 2000ms)
+      setTimeout(() => {
+        if (!gameOver) {
+          switchTurns(victim);
+        }
+      }, 2000);
     }
 
     function playerLabel(player) {
