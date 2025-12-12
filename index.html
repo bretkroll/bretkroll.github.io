@@ -308,14 +308,23 @@
       font-weight: 600;
     }
 
+    .square.preview .preview-number {
+      opacity: 1;
+      transition: opacity 1s ease-out;
+    }
+
+    .square.preview.fading .preview-number {
+      opacity: 0;
+    }
+
     .square.ambush {
       border-color: #ff4545;
       box-shadow: 0 0 10px rgba(255, 69, 69, 0.6);
     }
 
-    .square.ambush.ai-ambush {
-      border-color: #ffffff;
-      box-shadow: 0 0 12px rgba(255, 255, 255, 0.6);
+    .square.ai-ambush {
+      border-color: #2d374f;
+      box-shadow: none;
     }
 
     .win-overlay {
@@ -600,10 +609,7 @@
       { id: 'horizon-guards', name: 'Horizon', description: 'A squad auto-claims one border edge.', effect: 'claimEdge' },
       { id: 'waking-storm', name: 'Rando', description: 'Awakens a random tile to carry your mark.', effect: 'claimRandom' },
       { id: 'starlit-bloom', name: 'Starlit Bloom', description: 'A random tile erupts under your control.', effect: 'claimRandom' },
-      { id: 'void-rift', name: 'Void Rift', description: 'Curses a random tile that nobody can use this round.', effect: 'voidTile' },
-      { id: 'singed-hex', name: 'Singed Hex', description: 'Marks a single tile as untouchable.', effect: 'voidTile' },
-      { id: 'abyssal-bloom', name: 'Abyss', description: 'Spawns two cursed tiles in the arena.', effect: 'doubleVoid' },
-      { id: 'null-bloom', name: 'Null Bloom', description: 'Spreads a pair of void tiles at the start.', effect: 'doubleVoid' },
+      { id: 'void-rift', name: 'Hexed', description: 'Select a tile to curse. Nobody can use it this round.', effect: 'voidTile' },
       { id: 'purify-sigil', name: 'Purify Sigil', description: 'Cleanses a random cursed tile right now.', effect: 'cleanseTile' },
       { id: 'emma-bloom', name: 'Emma Bloom', description: 'Pick one of your tiles; all adjacent tiles become yours.', effect: 'emmaBloom' },
       { id: 'switcharoo', name: 'Switcharoo', description: 'Tap any letter to swap it to the other team.', effect: 'switcharoo' },
@@ -637,7 +643,7 @@
     let waitingForAI = false;
     let nextRoundTimeout = null;
     let aiChoiceTimeout = null;
-    let mysteryTileIndex = -1;
+    let mysteryTileIndices = [];
     let tileWeights = computeTileWeights(boardSize);
     let roundResolved = false;
     let lastRoundPoints = { X: 0, O: 0 };
@@ -672,7 +678,8 @@
         ambushAvailable: false,
         ambushArming: false,
         emmaBloomArming: false,
-        switcharooActive: false
+        switcharooActive: false,
+        hexArming: false
       };
     }
 
@@ -681,7 +688,7 @@
       if (!state) return false;
       if (gameOver || waitingForAI || currentPlayer !== HUMAN) return false;
       if (!state.ready || state.awaitingChoice) return false;
-      if (state.ambushArming || state.emmaBloomArming || state.switcharooActive) return false;
+      if (state.ambushArming || state.emmaBloomArming || state.switcharooActive || state.hexArming) return false;
       return true;
     }
 
@@ -807,6 +814,10 @@
         attemptEmmaBloomSelection(HUMAN, idx);
         return;
       }
+      if (playerState[HUMAN].hexArming) {
+        attemptHexPlacement(HUMAN, idx);
+        return;
+      }
       if (playerState[HUMAN].switcharooActive) {
         if (attemptSwitcharooSelection(HUMAN, idx)) {
           return;
@@ -827,7 +838,7 @@
         clearAmbushAt(idx);
       }
 
-      if (isMysteryTile(idx) && resolveMysteryTile(HUMAN)) {
+      if (isMysteryTile(idx) && resolveMysteryTile(HUMAN, idx)) {
         processTurnResult(HUMAN);
         return;
       }
@@ -904,7 +915,7 @@
       setTimeout(() => {
         showWinCelebration(winner);
         completeRound({ winner });
-      }, 2000);
+      }, 1500);
     }
 
     function handleDraw(message) {
@@ -1293,6 +1304,7 @@
       state.choices = [];
       state.ambushAvailable = false;
       state.ambushArming = false;
+      state.hexArming = false;
       renderCardChoices(player);
       if (player === HUMAN) {
         waitingForAI = false;
@@ -1303,7 +1315,7 @@
         statusElement.textContent = 'AI is drawing a card...';
         cardPanels.X?.panel?.classList?.remove('selectable');
         if (aiChoiceTimeout) clearTimeout(aiChoiceTimeout);
-        const aiDrawDelay = Math.round(randomDelay(750, 1250));
+        const aiDrawDelay = Math.round(randomDelay(500, 1000));
         aiChoiceTimeout = setTimeout(() => {
           applyAISelection();
           aiChoiceTimeout = null;
@@ -1383,8 +1395,9 @@
       }
       state.destroyUsed = false;
       state.switcharooActive = false;
+      state.hexArming = false;
 
-      const turnConsumedByCard = card.effect === 'voidTile' || card.effect === 'doubleVoid';
+      const turnConsumedByCard = false;
       const effectOutcome = applyCardEffect(player, card);
       const pendingEffect = effectOutcome === CARD_FLOW.PENDING;
       const effectConsumedTurn = effectOutcome === CARD_FLOW.CONSUME;
@@ -1397,8 +1410,16 @@
         if (player === HUMAN) {
           state.ready = false;
         } else {
-          state.ready = false;
-          processTurnResult(AI);
+          if (!gameOver) {
+            state.ready = true;
+            statusElement.textContent = 'AI is thinking...';
+            const aiMoveDelay = Math.round(randomDelay(1250, 1750));
+            setTimeout(() => {
+              if (!gameOver && currentPlayer === AI) {
+                aiMove();
+              }
+            }, aiMoveDelay);
+          }
         }
         return;
       }
@@ -1496,8 +1517,7 @@
           autoClaim(player, getAllIndices());
           return CARD_FLOW.CONTINUE;
         case 'voidTile':
-          corruptTile();
-          return CARD_FLOW.CONTINUE;
+          return triggerHex(player);
         case 'doubleVoid':
           corruptTile();
           corruptTile();
@@ -1573,7 +1593,7 @@
         return CARD_FLOW.CONTINUE;
       }
       executeEmmaBloom(player, choice);
-      return CARD_FLOW.CONSUME;
+      return CARD_FLOW.CONTINUE;
     }
 
     function attemptEmmaBloomSelection(player, idx) {
@@ -1586,7 +1606,8 @@
       state.emmaBloomArming = false;
       executeEmmaBloom(player, idx);
       if (!gameOver) {
-        processTurnResult(player);
+        state.ready = true;
+        statusElement.textContent = `${playerLabel(player)}'s Emma Bloom overtakes nearby tiles! Place your mark.`;
       }
     }
 
@@ -1600,8 +1621,8 @@
 
     function convertTileToPlayer(idx, player) {
       board[idx] = player;
-      if (idx === mysteryTileIndex) {
-        mysteryTileIndex = -1;
+      if (mysteryTileIndices.includes(idx)) {
+        mysteryTileIndices = mysteryTileIndices.filter(i => i !== idx);
       }
       clearAmbushAt(idx);
       const btn = boardElement.children[idx];
@@ -1679,6 +1700,75 @@
       return true;
     }
 
+    function triggerHex(player) {
+      const state = playerState[player];
+      if (!state) return CARD_FLOW.CONTINUE;
+      const availableTiles = getEmptyIndices(board, { includeMystery: false })
+        .filter(idx => !isAmbushMarked(idx));
+      if (!availableTiles.length) {
+        statusElement.textContent = 'No empty tiles available to hex.';
+        return CARD_FLOW.CONTINUE;
+      }
+      if (player === HUMAN) {
+        state.hexArming = true;
+        state.ready = false;
+        statusElement.textContent = 'Select an empty tile to hex.';
+        return CARD_FLOW.PENDING;
+      }
+      const target = chooseHexTileFor(player, availableTiles);
+      if (target === -1) {
+        statusElement.textContent = 'Hex fizzles with no valid target.';
+        return CARD_FLOW.CONTINUE;
+      }
+      hexTile(target);
+      statusElement.textContent = 'AI hexes a tile!';
+      evaluateBoardStateAfterAuto();
+      return CARD_FLOW.CONTINUE;
+    }
+
+    function attemptHexPlacement(player, idx) {
+      const state = playerState[player];
+      if (!state?.hexArming) return;
+      if (board[idx] || board[idx] === 'BLOCK' || isMysteryTile(idx) || isAmbushMarked(idx)) {
+        statusElement.textContent = 'Choose an empty tile to hex.';
+        return;
+      }
+      state.hexArming = false;
+      hexTile(idx);
+      evaluateBoardStateAfterAuto();
+      if (!gameOver) {
+        state.ready = true;
+        statusElement.textContent = `${playerLabel(player)} hexes a tile! Place your mark.`;
+      }
+    }
+
+    function hexTile(idx) {
+      if (idx < 0 || idx >= board.length) return;
+      if (board[idx] || board[idx] === 'BLOCK') return;
+      clearAmbushAt(idx);
+      board[idx] = 'BLOCK';
+      clearTilePreviewState(idx);
+      const btn = boardElement.children[idx];
+      if (btn) {
+        removeTileFadeOverlay(btn);
+        btn.textContent = '#';
+        btn.disabled = true;
+        btn.classList.add('blocked');
+        clearTileMark(btn);
+      }
+    }
+
+    function chooseHexTileFor(player, availableTiles) {
+      if (!availableTiles.length) return -1;
+      const opponent = player === HUMAN ? AI : HUMAN;
+      const strategicTiles = availableTiles.filter(idx => {
+        const neighbors = getNeighborIndices(idx);
+        return neighbors.some(neighbor => board[neighbor] === opponent);
+      });
+      const pool = strategicTiles.length ? strategicTiles : availableTiles;
+      return pool[Math.floor(Math.random() * pool.length)];
+    }
+
     function isValidSwitcharooTarget(idx) {
       if (idx < 0 || idx >= board.length) return false;
       if (isAmbushMarked(idx)) return false;
@@ -1725,7 +1815,8 @@
     function corruptTile() {
       const idx = getRandomEmptyIndex({ allowMystery: false });
       if (idx === -1) {
-        if (mysteryTileIndex !== -1 && !board[mysteryTileIndex]) {
+        const hasAvailableMystery = mysteryTileIndices.some(i => !board[i]);
+        if (hasAvailableMystery) {
           statusElement.textContent = 'No safe tiles to corrupt. The curse fizzles.';
           return;
         }
@@ -1783,21 +1874,25 @@
       const targets = state.destroyMode === 'chain'
         ? getConnectedCluster(idx, targetSymbol)
         : [idx];
-      targets.forEach(targetIdx => {
-        board[targetIdx] = '';
-        const btn = boardElement.children[targetIdx];
-        if (btn) {
-          removeTileFadeOverlay(btn);
-          btn.textContent = '';
-          btn.disabled = false;
-          btn.classList.remove('win', 'blocked');
-          clearTileMark(btn);
-        }
-        clearAmbushAt(targetIdx);
-      });
+      
       if (state.destroyMode === 'chain') {
+        animateCascadingCataclysm(idx, targets, targetSymbol);
         showChainReactionEffects();
+      } else {
+        targets.forEach(targetIdx => {
+          board[targetIdx] = '';
+          const btn = boardElement.children[targetIdx];
+          if (btn) {
+            removeTileFadeOverlay(btn);
+            btn.textContent = '';
+            btn.disabled = false;
+            btn.classList.remove('win', 'blocked');
+            clearTileMark(btn);
+          }
+          clearAmbushAt(targetIdx);
+        });
       }
+      
       const cardName = state.card?.name || 'a card';
       if (statusOverride) {
         statusElement.textContent = statusOverride;
@@ -1948,6 +2043,63 @@
       return cluster;
     }
 
+    function getDistanceMap(startIdx, cluster) {
+      const distances = new Map();
+      const queue = [{ idx: startIdx, dist: 0 }];
+      const visited = new Set([startIdx]);
+      
+      while (queue.length > 0) {
+        const { idx, dist } = queue.shift();
+        distances.set(idx, dist);
+        
+        getNeighborIndices(idx).forEach(neighbor => {
+          if (cluster.includes(neighbor) && !visited.has(neighbor)) {
+            visited.add(neighbor);
+            queue.push({ idx: neighbor, dist: dist + 1 });
+          }
+        });
+      }
+      
+      return distances;
+    }
+
+    function animateCascadingCataclysm(startIdx, cluster, symbol) {
+      if (!cluster.length) return;
+      
+      const distanceMap = getDistanceMap(startIdx, cluster);
+      const maxDistance = Math.max(...Array.from(distanceMap.values()));
+      
+      const TOTAL_DURATION = 2500;
+      const FADE_DURATION = 800;
+      
+      cluster.forEach(targetIdx => {
+        const btn = boardElement.children[targetIdx];
+        const removedSymbol = board[targetIdx];
+        
+        board[targetIdx] = '';
+        clearAmbushAt(targetIdx);
+        
+        if (btn) {
+          const distance = distanceMap.get(targetIdx) || 0;
+          const delay = maxDistance > 0 
+            ? (distance / maxDistance) * (TOTAL_DURATION - FADE_DURATION)
+            : 0;
+          
+          setTimeout(() => {
+            removeTileFadeOverlay(btn);
+            btn.textContent = '';
+            btn.disabled = false;
+            btn.classList.remove('win', 'blocked');
+            clearTileMark(btn);
+            
+            if (removedSymbol === HUMAN || removedSymbol === AI) {
+              animateLetterFade(btn, removedSymbol, FADE_DURATION);
+            }
+          }, delay);
+        }
+      });
+    }
+
     function getNeighborIndices(idx) {
       const neighbors = [];
       const row = Math.floor(idx / boardSize);
@@ -1987,12 +2139,13 @@
       const tile = boardElement.children[idx];
       if (!tile) return;
       clearTilePreviewState(idx);
-      tile.classList.add('ambush');
       tile.dataset.ambush = '1';
       const owner = ambushTraps.get(idx);
       if (owner === AI) {
+        tile.classList.remove('ambush');
         tile.classList.add('ai-ambush');
       } else {
+        tile.classList.add('ambush');
         tile.classList.remove('ai-ambush');
       }
     }
@@ -2024,8 +2177,12 @@
       if (placeAmbushTrap(player, idx)) {
         state.ambushArming = false;
         state.ambushAvailable = false;
-        statusElement.textContent = 'Ambush armed! Passing turn...';
-        processTurnResult(player);
+        if (!gameOver) {
+          state.ready = true;
+          statusElement.textContent = 'Ambush armed! Place your mark.';
+        } else {
+          statusElement.textContent = 'Ambush armed!';
+        }
       }
     }
 
@@ -2037,8 +2194,8 @@
 
     function triggerAmbush(idx, victim, owner) {
       ambushTraps.delete(idx);
-      if (idx === mysteryTileIndex) {
-        mysteryTileIndex = -1;
+      if (mysteryTileIndices.includes(idx)) {
+        mysteryTileIndices = mysteryTileIndices.filter(i => i !== idx);
       }
       const tile = boardElement.children[idx];
       if (tile) {
@@ -2322,15 +2479,25 @@
 
     function showTileWeightPreview() {
       weightPreviewActive = true;
-      mysteryTileIndex = -1;
+      mysteryTileIndices = [];
       const tiles = boardElement.children;
       board.forEach((cell, idx) => {
         const tile = tiles[idx];
         if (!tile) return;
-        tile.classList.remove('mystery');
+        tile.classList.remove('mystery', 'fading');
         if (!cell) {
           const value = tileWeights[idx];
-          tile.textContent = value != null ? String(value) : '';
+          // Remove any existing preview number
+          const existingNumber = tile.querySelector('.preview-number');
+          if (existingNumber) {
+            existingNumber.remove();
+          }
+          // Create span for the number
+          const numberSpan = document.createElement('span');
+          numberSpan.className = 'preview-number';
+          numberSpan.textContent = value != null ? String(value) : '';
+          tile.textContent = '';
+          tile.appendChild(numberSpan);
           tile.classList.add('preview');
           tile.dataset.preview = '1';
         }
@@ -2339,11 +2506,21 @@
         clearTimeout(previewTimeout);
         previewTimeout = null;
       }
+      // Start showing mystery tiles during the preview fade (after 1 second)
+      setupMysteryTile();
+      // After 1 second, start fading
+      setTimeout(() => {
+        [...boardElement.children].forEach((tile, idx) => {
+          if (tile && tile.dataset.preview === '1' && !board[idx]) {
+            tile.classList.add('fading');
+          }
+        });
+      }, 1000);
+      // After 2 seconds total (1s visible + 1s fade), remove completely
       previewTimeout = setTimeout(() => {
         endTileWeightPreview();
         previewTimeout = null;
-        setupMysteryTile();
-      }, 3000);
+      }, 2000);
     }
 
     function endTileWeightPreview() {
@@ -2352,9 +2529,13 @@
       [...boardElement.children].forEach((tile, idx) => {
         if (!tile) return;
         if (tile.dataset.preview === '1' && !board[idx]) {
+          const previewNumber = tile.querySelector('.preview-number');
+          if (previewNumber) {
+            previewNumber.remove();
+          }
           tile.textContent = '';
         }
-        tile.classList.remove('preview');
+        tile.classList.remove('preview', 'fading');
         tile.removeAttribute('data-preview');
       });
     }
@@ -2362,36 +2543,64 @@
     function clearTilePreviewState(idx) {
       const tile = boardElement.children[idx];
       if (!tile) return;
-      tile.classList.remove('preview');
+      const previewNumber = tile.querySelector('.preview-number');
+      if (previewNumber) {
+        previewNumber.remove();
+      }
+      tile.classList.remove('preview', 'fading');
       tile.removeAttribute('data-preview');
     }
 
+    function getMaxMysteryTiles() {
+      if (currentRound <= 2) return 1;
+      if (currentRound <= 4) return 2;
+      if (currentRound <= 6) return 3;
+      return 4; // Round 7
+    }
+
     function setupMysteryTile() {
-      if (weightPreviewActive) return;
-      mysteryTileIndex = -1;
-      if (Math.random() >= MYSTERY_CHANCE) return;
+      mysteryTileIndices = [];
+      const maxMystery = getMaxMysteryTiles();
       const available = getAllIndices().filter(idx => !board[idx]);
       if (!available.length) return;
-      mysteryTileIndex = available[Math.floor(Math.random() * available.length)];
-      const tile = boardElement.children[mysteryTileIndex];
-      if (tile) {
-        clearTilePreviewState(mysteryTileIndex);
-        tile.textContent = '?';
-        tile.classList.add('mystery');
-      }
+      
+      const numMystery = Math.random() < MYSTERY_CHANCE ? Math.min(maxMystery, available.length) : 0;
+      if (numMystery === 0) return;
+      
+      // Shuffle available indices and take the first numMystery
+      const shuffled = [...available].sort(() => Math.random() - 0.5);
+      const selected = shuffled.slice(0, numMystery);
+      
+      // Show them sequentially during the preview fade
+      const previewDuration = 3000;
+      const startDelay = 1000; // Start appearing 1 second into preview
+      const delayBetween = 400; // 400ms between each appearance
+      
+      selected.forEach((idx, i) => {
+        setTimeout(() => {
+          if (!board[idx]) {
+            mysteryTileIndices.push(idx);
+            const tile = boardElement.children[idx];
+            if (tile) {
+              clearTilePreviewState(idx);
+              tile.textContent = '?';
+              tile.classList.add('mystery');
+            }
+          }
+        }, startDelay + (i * delayBetween));
+      });
     }
 
     function isMysteryTile(idx) {
-      return idx === mysteryTileIndex && idx !== -1 && !board[idx];
+      return mysteryTileIndices.includes(idx) && idx !== -1 && !board[idx];
     }
 
-    function resolveMysteryTile(player) {
-      if (!isMysteryTile(mysteryTileIndex)) return false;
-      const idx = mysteryTileIndex;
+    function resolveMysteryTile(player, idx) {
+      if (!isMysteryTile(idx)) return false;
       const tile = boardElement.children[idx];
       const symbol = Math.random() < 0.5 ? HUMAN : AI;
       board[idx] = symbol;
-      mysteryTileIndex = -1;
+      mysteryTileIndices = mysteryTileIndices.filter(i => i !== idx);
       if (tile) {
         removeTileFadeOverlay(tile);
         clearTilePreviewState(idx);
@@ -2404,19 +2613,21 @@
     }
 
     function attemptAIMysteryTile() {
-      if (mysteryTileIndex === -1 || board[mysteryTileIndex]) return false;
-      const trapOwner = getAmbushOwner(mysteryTileIndex);
+      const availableMystery = mysteryTileIndices.filter(idx => !board[idx] && isMysteryTile(idx));
+      if (!availableMystery.length) return false;
+      const mysteryIdx = availableMystery[Math.floor(Math.random() * availableMystery.length)];
+      const trapOwner = getAmbushOwner(mysteryIdx);
       if (trapOwner && trapOwner !== AI) {
-        resolveAmbushSpring(AI, mysteryTileIndex, trapOwner);
+        resolveAmbushSpring(AI, mysteryIdx, trapOwner);
         return true;
       }
       if (trapOwner === AI) {
-        clearAmbushAt(mysteryTileIndex);
+        clearAmbushAt(mysteryIdx);
       }
-      const otherMovesAvailable = getEmptyIndices(board).length > 0;
+      const otherMovesAvailable = getEmptyIndices(board).length > availableMystery.length;
       const shouldTake = !otherMovesAvailable || Math.random() < 0.35;
       if (!shouldTake) return false;
-      resolveMysteryTile(AI);
+      resolveMysteryTile(AI, mysteryIdx);
       return true;
     }
 
