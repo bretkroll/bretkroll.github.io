@@ -1135,7 +1135,10 @@
       }
 
       // Only draw when all tiles are actually occupied (letters or hexes)
-      if (board.every(cell => cell)) {
+      // AND there are no unrevealed mystery tiles (they must be revealed first)
+      const allOccupied = board.every(cell => cell);
+      const noUnrevealedMysteryTiles = mysteryTileIndices.length === 0;
+      if (allOccupied && noUnrevealedMysteryTiles) {
         handleDraw();
         return true;
       }
@@ -1457,6 +1460,23 @@
       
       const move = findBestMove(board);
       if (move === -1) {
+        // Check if there are unrevealed mystery tiles - they must be revealed before a draw
+        const availableMystery = mysteryTileIndices.filter(idx => !board[idx] && isMysteryTile(idx));
+        if (availableMystery.length > 0) {
+          // There are mystery tiles available - resolve one (mystery tiles must be revealed before draw)
+          const mysteryIdx = availableMystery[Math.floor(Math.random() * availableMystery.length)];
+          const trapOwner = getAmbushOwner(mysteryIdx);
+          if (trapOwner && trapOwner !== AI) {
+            resolveAmbushSpring(AI, mysteryIdx, trapOwner);
+            return;
+          }
+          if (trapOwner === AI) {
+            clearAmbushAt(mysteryIdx);
+          }
+          resolveMysteryTile(AI, mysteryIdx);
+          processTurnResult(AI);
+          return;
+        }
         waitingForAI = false;
         triggerForcedDraw('AI cannot move. Round declared a draw.');
         return;
