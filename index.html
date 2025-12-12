@@ -90,6 +90,36 @@
       color: #ff5c7d;
     }
 
+    .square.o-mark.pulsate {
+      animation: pulsateO 1.2s ease-in-out infinite;
+    }
+
+    .square.x-mark.pulsate {
+      animation: pulsateX 1.2s ease-in-out infinite;
+    }
+
+    @keyframes pulsateO {
+      0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(255, 92, 125, 0.7);
+      }
+      50% {
+        transform: scale(1.08);
+        box-shadow: 0 0 12px 4px rgba(255, 92, 125, 0.9);
+      }
+    }
+
+    @keyframes pulsateX {
+      0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(79, 212, 255, 0.7);
+      }
+      50% {
+        transform: scale(1.08);
+        box-shadow: 0 0 12px 4px rgba(79, 212, 255, 0.9);
+      }
+    }
+
     .fade-letter {
       position: absolute;
       top: 50%;
@@ -359,7 +389,7 @@
 
     .square.preview .preview-number {
       opacity: 1;
-      transition: opacity 1s ease-out;
+      transition: opacity 0.75s ease-out;
     }
 
     .square.preview.fading .preview-number {
@@ -374,6 +404,43 @@
     .square.ambush.ai-ambush {
       border-color: #2d374f;
       box-shadow: none;
+    }
+
+    .square.selected {
+      border-color: #33c8ff;
+      box-shadow: 0 0 8px rgba(51, 200, 255, 0.5);
+    }
+
+    .square.ghost {
+      position: relative;
+    }
+
+    .square.ghost .ghost-mark {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 1em;
+      font-weight: bold;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+
+    .square.ghost.ghost-turn-0 .ghost-mark,
+    .square.ghost.ghost-turn-1 .ghost-mark {
+      opacity: 0.33;
+    }
+
+    .square.ghost.ghost-turn-2 .ghost-mark {
+      opacity: 0.66;
+    }
+
+    .square.ghost.ghost-turn-3 .ghost-mark {
+      opacity: 1;
+    }
+
+    .square.ghost.hidden-ghost .ghost-mark {
+      opacity: 0;
     }
 
     .win-overlay {
@@ -665,7 +732,8 @@
       { id: 'shatter-rune', name: 'Erasure', description: 'Click an enemy tile to erase it this turn.', effect: 'destroyTile' },
       { id: 'ruin-pulse', name: 'Ruin Pulse', description: 'Charge a pulse that destroys one enemy tile.', effect: 'destroyTile' },
       { id: 'cataclysm-weave', name: 'Cataclysm', description: 'Detonate a tile to erase every connected enemy letter.', effect: 'destroyConnected' },
-      { id: 'ambush-snare', name: 'Ambush', description: 'Mark an empty tile. The next foe there loses all connected letters.', effect: 'ambushTrap' }
+      { id: 'ambush-snare', name: 'Ambush', description: 'Mark an empty tile. The next foe there loses all connected letters.', effect: 'ambushTrap' },
+      { id: 'ghosts', name: 'Ghosts', description: 'Spawn 3 ghosts on random tiles. They materialize after 3 turns.', effect: 'ghosts' }
     ];
     const winOverlay = document.getElementById('winOverlay');
     const winMessage = document.getElementById('winMessage');
@@ -700,6 +768,7 @@
     let weightPreviewActive = false;
     let roundSummaryTimeout = null;
     let ambushTraps = new Map();
+    let ghostTiles = new Map(); // Map<idx, {owner: player, turns: number}>
     let ambushFlashTimeout = null;
     let ambushAlertTimeout = null;
     let ambushShakeTimeout = null;
@@ -893,11 +962,30 @@
       }
 
       if (board[idx]) return;
+      
+      // Check for enemy ghost that hasn't formed yet - can claim it to kill the ghost
+      const enemyGhost = ghostTiles.get(idx);
+      if (enemyGhost && enemyGhost.owner !== HUMAN && enemyGhost.turns < 3) {
+        clearGhostAt(idx);
+        statusElement.textContent = 'You claimed the tile and destroyed the enemy ghost!';
+        makeMove(idx, HUMAN);
+        processTurnResult(HUMAN);
+        return;
+      }
+      
+      // Clear own ghost if present
+      if (isGhostTile(idx)) {
+        clearGhostAt(idx);
+      }
       makeMove(idx, HUMAN);
       processTurnResult(HUMAN);
     }
 
     function processTurnResult(player) {
+      // Advance ghost turns for the opponent's ghosts (they advance when you take a turn)
+      const opponent = player === HUMAN ? AI : HUMAN;
+      advanceGhostTurns(opponent);
+      
       if (checkGameState()) return;
       
       // Check for forced ambush move before switching turns
@@ -945,17 +1033,38 @@
 
     function switchTurns(player) {
       currentPlayer = player === HUMAN ? AI : HUMAN;
+      // Update ghost visibility when turn changes
+      ghostTiles.forEach((ghost, idx) => {
+        renderGhostTile(idx);
+      });
+      updateDestroyTargetPulsation();
       startCardDraftFor(currentPlayer);
     }
 
     function checkForcedAmbushMove() {
       // Get all empty tiles (not blocked, not mystery, not already occupied)
-      const emptyTiles = getEmptyIndices(board, { includeMystery: false });
+      // Include tiles with ghosts that haven't formed yet (they can be claimed)
+      const emptyTiles = getEmptyIndices(board, { includeMystery: false })
+        .filter(idx => {
+          const ghost = ghostTiles.get(idx);
+          // Can move to empty tile or enemy ghost that hasn't formed
+          if (ghost && ghost.owner === currentPlayer && ghost.turns < 3) {
+            return false; // Can't move to own unformed ghost
+          }
+          return true;
+        });
       
       // If there's exactly one empty tile left
       if (emptyTiles.length === 1) {
         const lastTile = emptyTiles[0];
         const ambushOwner = getAmbushOwner(lastTile);
+        const ghost = ghostTiles.get(lastTile);
+        
+        // If there's a ghost that hasn't formed, ambush doesn't trigger until ghost forms
+        if (ghost && ghost.turns < 3) {
+          // Ghost hasn't formed yet, so ambush is delayed
+          return null; // Not a forced move yet
+        }
         
         // If it's an opponent's ambush, force the move and activate it
         if (ambushOwner && ambushOwner !== currentPlayer) {
@@ -1142,6 +1251,10 @@
     }
 
     function makeMove(idx, player) {
+      // Clear ghost if present
+      if (isGhostTile(idx)) {
+        clearGhostAt(idx);
+      }
       board[idx] = player;
       const tile = boardElement.children[idx];
       if (tile) {
@@ -1190,6 +1303,7 @@
       weightPreviewActive = false;
       clearAmbushEffects();
       clearChainEffects();
+      ghostTiles.clear();
 
       aiCataclysmPending = false;
       if (resetCampaign || options.resetCampaign) {
@@ -1207,6 +1321,7 @@
       tileWeights = computeTileWeights(boardSize);
       winningLines = generateWinningLines(boardSize, winCondition);
       ambushTraps = new Map();
+      ghostTiles.clear();
       initBoard();
 
       currentPlayer = HUMAN;
@@ -1218,17 +1333,35 @@
       [...boardElement.children].forEach(btn => {
         btn.textContent = '';
         btn.disabled = false;
-        btn.classList.remove('win', 'blocked', 'mystery', 'ambush');
+        btn.classList.remove('win', 'blocked', 'mystery', 'ambush', 'ghost', 'ghost-turn-0', 'ghost-turn-1', 'ghost-turn-2', 'ghost-turn-3', 'hidden-ghost', 'selected', 'pulsate');
         removeTileFadeOverlay(btn);
         clearTileMark(btn);
+        const ghostMark = btn.querySelector('.ghost-mark');
+        if (ghostMark) {
+          ghostMark.remove();
+        }
       });
 
       updateScoreDisplay();
 
       playerState.X = createEmptyState();
       playerState.O = createEmptyState();
+      // Create empty card boxes immediately
+      const grid = cardPanels.X?.grid;
+      if (grid) {
+        grid.innerHTML = '';
+        for (let i = 0; i < 3; i++) {
+          const blankCard = document.createElement('div');
+          blankCard.className = 'card disabled';
+          blankCard.innerHTML = '';
+          grid.appendChild(blankCard);
+        }
+      }
       showTileWeightPreview();
-      startCardDraftFor(HUMAN);
+      // Delay card text rendering until tile preview is fully gone (1.75 seconds)
+      setTimeout(() => {
+        startCardDraftFor(HUMAN);
+      }, 1750);
     }
 
     function scheduleNextRound(options = {}) {
@@ -1251,7 +1384,11 @@
         processTurnResult(AI);
         return;
       }
-      maybeAIDestroyTile();
+      const destroyPending = maybeAIDestroyTile();
+      if (destroyPending) {
+        // Destroy will happen after 1.5 seconds, don't make a regular move
+        return;
+      }
       if (!gameOver && currentPlayer === AI && playerState[AI].ready && attemptAIMysteryTile()) {
         processTurnResult(AI);
         return;
@@ -1277,6 +1414,17 @@
         triggerForcedDraw('AI cannot move. Round declared a draw.');
         return;
       }
+      
+      // Check for enemy ghost that hasn't formed yet - can claim it to kill the ghost
+      const enemyGhost = ghostTiles.get(move);
+      if (enemyGhost && enemyGhost.owner !== AI && enemyGhost.turns < 3) {
+        clearGhostAt(move);
+        statusElement.textContent = 'AI claimed the tile and destroyed your ghost!';
+        makeMove(move, AI);
+        processTurnResult(AI);
+        return;
+      }
+      
       const trapOwner = getAmbushOwner(move);
       if (trapOwner && trapOwner !== AI) {
         resolveAmbushSpring(AI, move, trapOwner);
@@ -1284,6 +1432,10 @@
       }
       if (trapOwner === AI) {
         clearAmbushAt(move);
+      }
+      // Clear own ghost if present
+      if (isGhostTile(move)) {
+        clearGhostAt(move);
       }
       makeMove(move, AI);
       processTurnResult(AI);
@@ -1294,7 +1446,7 @@
         let bestScore = -Infinity;
         let move = -1;
         state.forEach((cell, idx) => {
-          if (!cell && !isMysteryTile(idx)) {
+          if (!cell && !isMysteryTile(idx) && !isGhostTile(idx)) {
             state[idx] = AI;
             const score = minimax(state, false, 0);
             state[idx] = '';
@@ -1348,7 +1500,7 @@
           const cell = board[idx];
           if (cell === HUMAN) {
             humanCount++;
-          } else if (cell === AI || cell === 'BLOCK' || isMysteryTile(idx)) {
+          } else if (cell === AI || cell === 'BLOCK' || isMysteryTile(idx) || isGhostTile(idx)) {
             invalidLine = true;
             break;
           } else {
@@ -1371,7 +1523,7 @@
       if (isMaximizing) {
         let bestScore = -Infinity;
         state.forEach((cell, idx) => {
-          if (!cell && !isMysteryTile(idx)) {
+          if (!cell && !isMysteryTile(idx) && !isGhostTile(idx)) {
             state[idx] = AI;
             bestScore = Math.max(bestScore, minimax(state, false, depth + 1));
             state[idx] = '';
@@ -1381,7 +1533,7 @@
       } else {
         let bestScore = Infinity;
         state.forEach((cell, idx) => {
-          if (!cell && !isMysteryTile(idx)) {
+          if (!cell && !isMysteryTile(idx) && !isGhostTile(idx)) {
             state[idx] = HUMAN;
             bestScore = Math.min(bestScore, minimax(state, true, depth + 1));
             state[idx] = '';
@@ -1393,8 +1545,38 @@
 
     function getWinner(state) {
       for (const line of winningLines) {
-        const first = state[line[0]];
-        if ((first === HUMAN || first === AI) && line.every(idx => state[idx] === first)) {
+        // Find the first real tile (not an unformed ghost) in the line
+        let first = null;
+        for (const idx of line) {
+          const ghost = ghostTiles.get(idx);
+          // CRITICAL: Unformed ghosts (turns < 3) don't count - treat as empty
+          if (ghost && ghost.turns < 3) continue;
+          const cell = state[idx];
+          // Only count real tiles in the board array
+          if (cell === HUMAN || cell === AI) {
+            first = cell;
+            break;
+          }
+        }
+        
+        // If no real tile found in the line, skip it
+        if (!first) continue;
+        
+        // Check if all cells in the line match (ignoring unformed ghosts)
+        const allMatch = line.every(idx => {
+          const ghost = ghostTiles.get(idx);
+          // CRITICAL: Unformed ghosts (turns < 3) don't count - treat as empty
+          // Even if board[idx] is somehow set incorrectly, unformed ghosts should never count
+          if (ghost && ghost.turns < 3) {
+            // This position is empty (ghost hasn't formed), so it can't match
+            return false;
+          }
+          const cell = state[idx];
+          // Must match the first tile we found AND be a real tile (not empty)
+          return cell === first && cell !== '';
+        });
+        
+        if (allMatch) {
           return { player: first, line };
         }
       }
@@ -1402,7 +1584,20 @@
     }
 
     function isPlayerWinning(state, player) {
-      return winningLines.some(line => line.every(idx => state[idx] === player));
+      return winningLines.some(line => {
+        // Check if all cells in the line belong to the player (ignoring unformed ghosts)
+        // CRITICAL: Unformed ghosts (turns < 3) don't count - they're treated as empty
+        return line.every(idx => {
+          const ghost = ghostTiles.get(idx);
+          // If there's an unformed ghost, this position is empty and can't be part of a win
+          if (ghost && ghost.turns < 3) {
+            return false; // This position doesn't count toward the win
+          }
+          // Only count real tiles in the board array
+          const cell = state[idx];
+          return cell === player;
+        });
+      });
     }
 
     function startCardDraftFor(player) {
@@ -1472,6 +1667,10 @@
     function isCardAvailable(card) {
       if (!card) return false;
       if (card.effect === 'emmaBloom' && currentRound < 4) {
+        return false;
+      }
+      // Ghosts card is disabled from selection (code kept for future use)
+      if (card.effect === 'ghosts') {
         return false;
       }
       return true;
@@ -1579,6 +1778,7 @@
         state.destroyMode = 'single';
       }
       state.destroyUsed = false;
+      updateDestroyTargetPulsation();
       state.switcharooActive = false;
       state.hexArming = false;
 
@@ -1674,7 +1874,7 @@
         }
       }
       const roll = Math.random();
-      const preferredOrder = ['extraTurn', 'destroyConnected', 'emmaBloom', 'destroyTile', 'cleanseTile', 'claimCenter', 'claimCorner', 'claimEdge', 'claimRandom', 'doubleVoid', 'voidTile'];
+      const preferredOrder = ['extraTurn', 'destroyConnected', 'emmaBloom', 'ghosts', 'destroyTile', 'cleanseTile', 'claimCenter', 'claimCorner', 'claimEdge', 'claimRandom', 'doubleVoid', 'voidTile'];
       const scored = choices.map((card, idx) => {
         const priority = preferredOrder.indexOf(card.effect);
         const score = priority === -1 ? preferredOrder.length + idx : priority;
@@ -1717,6 +1917,8 @@
         case 'ambushTrap':
           prepareAmbushTrap(player);
           return CARD_FLOW.PENDING;
+        case 'ghosts':
+          return triggerGhosts(player);
         default:
           return CARD_FLOW.CONTINUE;
       }
@@ -1753,6 +1955,10 @@
       const pool = indices.filter(idx => !board[idx] && !isMysteryTile(idx) && !isAmbushMarked(idx));
       if (!pool.length) return null;
       const idx = pool[Math.floor(Math.random() * pool.length)];
+      // Clear ghost if present
+      if (isGhostTile(idx)) {
+        clearGhostAt(idx);
+      }
       makeMove(idx, player);
       evaluateBoardStateAfterAuto();
       return idx;
@@ -1810,6 +2016,7 @@
         mysteryTileIndices = mysteryTileIndices.filter(i => i !== idx);
       }
       clearAmbushAt(idx);
+      clearGhostAt(idx);
       const btn = boardElement.children[idx];
       if (btn) {
         removeTileFadeOverlay(btn);
@@ -1931,6 +2138,7 @@
       if (idx < 0 || idx >= board.length) return;
       if (board[idx] || board[idx] === 'BLOCK' || isMysteryTile(idx)) return;
       clearAmbushAt(idx);
+      clearGhostAt(idx);
       board[idx] = 'BLOCK';
       clearTilePreviewState(idx);
       const btn = boardElement.children[idx];
@@ -2049,12 +2257,36 @@
       return Boolean(state && state.destroyAvailable && !state.destroyUsed);
     }
 
+    function updateDestroyTargetPulsation() {
+      const humanState = playerState[HUMAN];
+      const aiState = playerState[AI];
+      // Only pulsate for Erasure card (shatter-rune), not other destroy cards
+      const humanHasErasure = humanState && humanState.card && humanState.card.id === 'shatter-rune';
+      const aiHasErasure = aiState && aiState.card && aiState.card.id === 'shatter-rune';
+      const humanShouldPulsate = humanHasErasure && humanState.destroyAvailable && !humanState.destroyUsed && currentPlayer === HUMAN && !gameOver;
+      const aiShouldPulsate = aiHasErasure && aiState.destroyAvailable && !aiState.destroyUsed && currentPlayer === AI && !gameOver;
+      
+      [...boardElement.children].forEach((tile, idx) => {
+        const cell = board[idx];
+        tile.classList.remove('pulsate');
+        
+        if (cell === AI && humanShouldPulsate) {
+          // Human has Erasure - pulsate O tiles
+          tile.classList.add('pulsate');
+        } else if (cell === HUMAN && aiShouldPulsate) {
+          // AI has Erasure - pulsate X tiles
+          tile.classList.add('pulsate');
+        }
+      });
+    }
+
     function useDestroyAbility(player, idx, statusOverride) {
       if (!canUseDestroy(player)) return false;
       const opponent = player === HUMAN ? AI : HUMAN;
       if (board[idx] !== opponent) return false;
       const state = playerState[player];
       state.destroyUsed = true;
+      updateDestroyTargetPulsation();
       const targetSymbol = board[idx];
       const targets = state.destroyMode === 'chain'
         ? getConnectedCluster(idx, targetSymbol)
@@ -2093,22 +2325,42 @@
     function maybeAIDestroyTile() {
       if (!canUseDestroy(AI)) {
         aiCataclysmPending = false;
-        return;
+        return false;
       }
-      if (aiCataclysmPending) {
-        const bestTarget = getBestCataclysmTarget();
-        if (bestTarget.index !== -1 && bestTarget.size >= 2) {
-          const cardName = playerState[AI].card?.name || 'an ability';
-          aiCataclysmPending = false;
-          useDestroyAbility(AI, bestTarget.index, `AI unleashed ${cardName} to collapse your tiles.`);
+      // Update pulsation to show X tiles pulsating
+      updateDestroyTargetPulsation();
+      
+      // Wait 1.5 seconds before destroying
+      setTimeout(() => {
+        if (!canUseDestroy(AI) || gameOver || currentPlayer !== AI) {
+          updateDestroyTargetPulsation();
           return;
         }
-        aiCataclysmPending = false;
-      }
-      const target = findHumanTileToDestroy();
-      if (target === -1) return;
-      const cardName = playerState[AI].card?.name || 'an ability';
-      useDestroyAbility(AI, target, `AI activated ${cardName} to obliterate your tile.`);
+        if (aiCataclysmPending) {
+          const bestTarget = getBestCataclysmTarget();
+          if (bestTarget.index !== -1 && bestTarget.size >= 2) {
+            const cardName = playerState[AI].card?.name || 'an ability';
+            aiCataclysmPending = false;
+            useDestroyAbility(AI, bestTarget.index, `AI unleashed ${cardName} to collapse your tiles.`);
+            if (!gameOver && currentPlayer === AI) {
+              processTurnResult(AI);
+            }
+            return;
+          }
+          aiCataclysmPending = false;
+        }
+        const target = findHumanTileToDestroy();
+        if (target === -1) {
+          updateDestroyTargetPulsation();
+          return;
+        }
+        const cardName = playerState[AI].card?.name || 'an ability';
+        useDestroyAbility(AI, target, `AI activated ${cardName} to obliterate your tile.`);
+        if (!gameOver && currentPlayer === AI) {
+          processTurnResult(AI);
+        }
+      }, 1500);
+      return true; // Indicates destroy is pending
     }
 
     function findHumanTileToDestroy() {
@@ -2148,10 +2400,12 @@
 
     function getEmptyIndices(state, options = {}) {
       const includeMystery = Boolean(options.includeMystery);
+      const includeGhosts = Boolean(options.includeGhosts);
       return state
         .map((cell, idx) => {
           if (cell) return null;
           if (!includeMystery && isMysteryTile(idx)) return null;
+          if (!includeGhosts && isGhostTile(idx)) return null;
           return idx;
         })
         .filter(idx => idx !== null);
@@ -2374,6 +2628,18 @@
     }
 
     function resolveAmbushSpring(player, idx, owner) {
+      // Check if there's a ghost on this tile that hasn't formed yet
+      const ghost = ghostTiles.get(idx);
+      if (ghost && ghost.turns < 3) {
+        // Ghost hasn't formed yet, so ambush doesn't trigger
+        // The ghost will trigger the ambush when it materializes
+        makeMove(idx, player);
+        // Mark that this ghost will trigger ambush when it forms
+        ghost.ambushOwner = owner;
+        finishAmbushTurn(player);
+        return;
+      }
+      // No ghost or ghost is formed, trigger ambush normally
       makeMove(idx, player);
       triggerAmbush(idx, player, owner);
       finishAmbushTurn(player);
@@ -2664,6 +2930,164 @@
       document.body.classList.remove('chain-shake');
     }
 
+    function triggerGhosts(player) {
+      const state = playerState[player];
+      if (!state) return CARD_FLOW.CONTINUE;
+      // Get all empty tiles (can include tiles with enemy ghosts that haven't formed)
+      const availableTiles = getEmptyIndices(board, { includeMystery: false })
+        .filter(idx => {
+          // Can place on empty tiles or enemy ghosts that haven't formed yet
+          const enemyGhost = ghostTiles.get(idx);
+          if (enemyGhost && enemyGhost.owner !== player && enemyGhost.turns < 3) {
+            return true; // Can overwrite enemy ghost
+          }
+          // Can't place on own ghost or formed ghost
+          if (isGhostTile(idx)) return false;
+          return true;
+        });
+      if (!availableTiles.length) {
+        statusElement.textContent = 'No available tiles for ghosts.';
+        return CARD_FLOW.CONTINUE;
+      }
+      // Automatically spawn 3 random ghosts
+      const maxGhosts = Math.min(3, availableTiles.length);
+      const selectedTiles = [];
+      const tilesToChoose = [...availableTiles];
+      for (let i = 0; i < maxGhosts; i++) {
+        if (tilesToChoose.length === 0) break;
+        const randomIdx = Math.floor(Math.random() * tilesToChoose.length);
+        selectedTiles.push(tilesToChoose[randomIdx]);
+        tilesToChoose.splice(randomIdx, 1);
+      }
+      selectedTiles.forEach(idx => {
+        // Clear enemy ghost if present
+        const enemyGhost = ghostTiles.get(idx);
+        if (enemyGhost && enemyGhost.owner !== player) {
+          clearGhostAt(idx);
+        }
+        placeGhost(player, idx);
+      });
+      statusElement.textContent = `${playerLabel(player)} spawned ${selectedTiles.length} ghost${selectedTiles.length !== 1 ? 's' : ''}!`;
+      evaluateBoardStateAfterAuto();
+      return CARD_FLOW.CONTINUE;
+    }
+
+
+    function placeGhost(player, idx) {
+      if (board[idx] || isMysteryTile(idx)) return false;
+      // Can place on enemy ghost (will overwrite) or empty tile
+      // Can also place on ambush tile (ambush won't trigger until ghost materializes)
+      const existingGhost = ghostTiles.get(idx);
+      if (existingGhost && existingGhost.owner === player) return false; // Can't place on own ghost
+      
+      // Clear enemy ghost if present
+      if (existingGhost && existingGhost.owner !== player) {
+        clearGhostAt(idx);
+      }
+      
+      ghostTiles.set(idx, { owner: player, turns: 0 });
+      renderGhostTile(idx);
+      return true;
+    }
+
+    function renderGhostTile(idx) {
+      const ghost = ghostTiles.get(idx);
+      if (!ghost) return;
+      const tile = boardElement.children[idx];
+      if (!tile) return;
+      
+      tile.classList.add('ghost');
+      const turnClass = `ghost-turn-${Math.min(ghost.turns, 3)}`;
+      tile.classList.remove('ghost-turn-0', 'ghost-turn-1', 'ghost-turn-2', 'ghost-turn-3');
+      tile.classList.add(turnClass);
+      
+      // Remove existing ghost mark
+      const existingMark = tile.querySelector('.ghost-mark');
+      if (existingMark) {
+        existingMark.remove();
+      }
+      
+      // Visibility logic: opponent can't see your ghosts until they're opaque (turn 3)
+      // Hide AI ghosts from human player until turn 3, show human ghosts always
+      // When viewing as human: hide AI ghosts (turns < 3), show X ghosts always
+      const shouldHide = ghost.owner === AI && ghost.turns < 3;
+      
+      if (shouldHide) {
+        tile.classList.add('hidden-ghost');
+        // Don't add ghost mark if hidden
+      } else {
+        tile.classList.remove('hidden-ghost');
+        // Only add ghost mark if it should be visible
+        const ghostMark = document.createElement('span');
+        ghostMark.className = 'ghost-mark';
+        ghostMark.textContent = ghost.owner;
+        ghostMark.style.color = ghost.owner === HUMAN ? '#4fd4ff' : '#ff5c7d';
+        tile.appendChild(ghostMark);
+      }
+    }
+
+    function advanceGhostTurns(ghostOwner) {
+      // Only advance ghosts owned by the specified player
+      // Ghosts advance when the opponent takes a turn
+      ghostTiles.forEach((ghost, idx) => {
+        if (ghost.owner !== ghostOwner) return; // Only advance ghosts owned by ghostOwner
+        
+        ghost.turns++;
+        renderGhostTile(idx);
+        
+        // If ghost becomes fully opaque (turn 3), convert to real tile
+        if (ghost.turns >= 3 && !board[idx]) {
+          board[idx] = ghost.owner;
+          const ambushOwner = getAmbushOwner(idx);
+          const owner = ghost.owner;
+          ghostTiles.delete(idx);
+          const tile = boardElement.children[idx];
+          if (tile) {
+            tile.classList.remove('ghost', 'ghost-turn-0', 'ghost-turn-1', 'ghost-turn-2', 'ghost-turn-3', 'hidden-ghost');
+            const ghostMark = tile.querySelector('.ghost-mark');
+            if (ghostMark) {
+              ghostMark.remove();
+            }
+            tile.textContent = owner;
+            applyTileMark(tile, owner);
+          }
+          
+          // Check if this tile has an ambush - if so, trigger it now that ghost is formed
+          if (ambushOwner && ambushOwner !== owner) {
+            // Ghost materialized on opponent's ambush - trigger ambush
+            triggerAmbush(idx, owner, ambushOwner);
+            finishAmbushTurn(owner);
+            statusElement.textContent = `${playerLabel(owner)}'s ghost materializes and triggers an ambush!`;
+          } else {
+            statusElement.textContent = `${playerLabel(owner)}'s ghost materializes!`;
+          }
+          evaluateBoardStateAfterAuto();
+        }
+      });
+    }
+
+    function clearGhostAt(idx) {
+      if (!ghostTiles.has(idx)) return;
+      ghostTiles.delete(idx);
+      const tile = boardElement.children[idx];
+      if (tile) {
+        tile.classList.remove('ghost', 'ghost-turn-0', 'ghost-turn-1', 'ghost-turn-2', 'ghost-turn-3', 'hidden-ghost');
+        const ghostMark = tile.querySelector('.ghost-mark');
+        if (ghostMark) {
+          ghostMark.remove();
+        }
+      }
+    }
+
+    function isGhostTile(idx) {
+      return ghostTiles.has(idx);
+    }
+
+    function getGhostOwner(idx) {
+      const ghost = ghostTiles.get(idx);
+      return ghost ? ghost.owner : null;
+    }
+
     function showTileWeightPreview() {
       weightPreviewActive = true;
       mysteryTileIndices = [];
@@ -2703,11 +3127,11 @@
           }
         });
       }, 1000);
-      // After 2 seconds total (1s visible + 1s fade), remove completely
+      // After 1.75 seconds total (1s visible + 0.75s fade), remove completely
       previewTimeout = setTimeout(() => {
         endTileWeightPreview();
         previewTimeout = null;
-      }, 2000);
+      }, 1750);
     }
 
     function endTileWeightPreview() {
