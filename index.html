@@ -548,6 +548,29 @@
       transform: scale(1);
     }
 
+    .double-ambush-alert {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 72px;
+      font-weight: 900;
+      color: #ff6b00;
+      letter-spacing: 0.25em;
+      text-shadow: 0 0 25px rgba(255, 107, 0, 0.9), 0 0 20px rgba(0, 0, 0, 0.8);
+      opacity: 0;
+      transform: scale(0.8);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      pointer-events: none;
+      z-index: 14;
+    }
+
+    .double-ambush-alert.show {
+      opacity: 1;
+      transform: scale(1);
+    }
+
     .chain-alert {
       position: fixed;
       inset: 0;
@@ -677,6 +700,7 @@
   </div>
   <div id="ambushFlash" class="ambush-flash"></div>
   <div id="ambushAlert" class="ambush-alert">AMBUSH!!!!</div>
+  <div id="doubleAmbushAlert" class="double-ambush-alert">DOUBLE AMBUSH!!!!</div>
   <div id="chainFlash" class="chain-flash"></div>
   <div id="chainAlert" class="chain-alert">CHAIN REACTION!!!!</div>
   <div id="campaignOverlay" class="campaign-overlay">
@@ -740,6 +764,7 @@
     const confettiContainer = document.getElementById('confetti');
     const ambushFlashElement = document.getElementById('ambushFlash');
     const ambushAlertElement = document.getElementById('ambushAlert');
+    const doubleAmbushAlertElement = document.getElementById('doubleAmbushAlert');
     const chainFlashElement = document.getElementById('chainFlash');
     const chainAlertElement = document.getElementById('chainAlert');
     const campaignOverlay = document.getElementById('campaignOverlay');
@@ -772,6 +797,7 @@
     let ambushFlashTimeout = null;
     let ambushAlertTimeout = null;
     let ambushShakeTimeout = null;
+    let doubleAmbushAlertTimeout = null;
     let chainFlashTimeout = null;
     let chainAlertTimeout = null;
     let chainShakeTimeout = null;
@@ -2625,10 +2651,24 @@
     }
 
     function placeAmbushTrap(player, idx) {
-      if (board[idx] || isAmbushMarked(idx) || isMysteryTile(idx)) return false;
+      if (board[idx] || isMysteryTile(idx)) return { success: false };
+      
+      // Check if there's already an opponent's ambush on this tile
+      const existingAmbushOwner = getAmbushOwner(idx);
+      if (existingAmbushOwner && existingAmbushOwner !== player) {
+        // Double ambush! Trigger the opponent's ambush immediately
+        // The victim is the player placing the ambush (their connected tiles get destroyed)
+        clearAmbushAt(idx); // Clear the opponent's ambush
+        triggerDoubleAmbush(idx, player, existingAmbushOwner);
+        return { success: true, doubleAmbush: true };
+      }
+      
+      // Can't place on own ambush
+      if (isAmbushMarked(idx)) return { success: false };
+      
       ambushTraps.set(idx, player);
       renderAmbushTile(idx);
-      return true;
+      return { success: true, doubleAmbush: false };
     }
 
     function clearAmbushAt(idx) {
@@ -2644,18 +2684,41 @@
     function attemptAmbushPlacement(player, idx) {
       const state = playerState[player];
       if (!state?.ambushArming) return;
-      if (board[idx] || board[idx] === 'BLOCK' || isAmbushMarked(idx) || isMysteryTile(idx)) {
+      if (board[idx] || board[idx] === 'BLOCK' || isMysteryTile(idx)) {
         statusElement.textContent = 'Choose an empty tile for your ambush.';
         return;
       }
-      if (placeAmbushTrap(player, idx)) {
+      // Allow placing on opponent's ambush (will trigger double ambush)
+      // But not on own ambush
+      const existingAmbushOwner = getAmbushOwner(idx);
+      if (existingAmbushOwner === player) {
+        statusElement.textContent = 'Choose an empty tile for your ambush.';
+        return;
+      }
+      const result = placeAmbushTrap(player, idx);
+      if (result && result.success) {
         state.ambushArming = false;
         state.ambushAvailable = false;
-        if (!gameOver) {
-          state.ready = true;
-          statusElement.textContent = 'Ambush armed! Place your mark.';
+        if (result.doubleAmbush) {
+          // Double ambush triggered - player's turn ends after effects
+          state.ready = false;
+          // Wait for double ambush animations to complete (2000ms for shake)
+          setTimeout(() => {
+            if (!gameOver) {
+              evaluateBoardStateAfterAuto();
+              if (!gameOver) {
+                processTurnResult(player);
+              }
+            }
+          }, 2000);
         } else {
-          statusElement.textContent = 'Ambush armed!';
+          // Normal ambush placement
+          if (!gameOver) {
+            state.ready = true;
+            statusElement.textContent = 'Ambush armed! Place your mark.';
+          } else {
+            statusElement.textContent = 'Ambush armed!';
+          }
         }
       }
     }
@@ -2708,6 +2771,38 @@
       });
       playAmbushEffects();
       statusElement.textContent = `${playerLabel(owner)}'s ambush detonates! ${playerLabel(victim)} loses ${cluster.length} tiles.`;
+    }
+
+    function triggerDoubleAmbush(idx, victim, owner) {
+      // Double ambush: victim is the player placing the ambush, owner is the original ambush owner
+      if (mysteryTileIndices.includes(idx)) {
+        mysteryTileIndices = mysteryTileIndices.filter(i => i !== idx);
+      }
+      const tile = boardElement.children[idx];
+      if (tile) {
+        tile.classList.remove('ambush', 'ai-ambush');
+      }
+      const cluster = getConnectedCluster(idx, victim);
+      cluster.forEach(target => {
+        const removedSymbol = board[target];
+        board[target] = '';
+        const cell = boardElement.children[target];
+        if (cell) {
+          cell.disabled = false;
+          cell.classList.remove('win', 'blocked');
+          clearTileMark(cell);
+          removeTileFadeOverlay(cell);
+          if (removedSymbol === HUMAN || removedSymbol === AI) {
+            cell.textContent = '';
+            animateLetterFade(cell, removedSymbol);
+          } else {
+            cell.textContent = '';
+          }
+        }
+        clearAmbushAt(target);
+      });
+      playDoubleAmbushEffects();
+      statusElement.textContent = `DOUBLE AMBUSH! ${playerLabel(owner)}'s ambush detonates! ${playerLabel(victim)} loses ${cluster.length} tiles.`;
     }
 
     function finishAmbushTurn(victim) {
@@ -2862,8 +2957,24 @@
         if (idx === -1) {
           statusElement.textContent = 'AI tried to set an ambush but found no space.';
         } else {
-          placeAmbushTrap(player, idx);
-          statusElement.textContent = 'AI has seeded an ambush somewhere on the board!';
+          const result = placeAmbushTrap(player, idx);
+          if (result && result.success) {
+            if (result.doubleAmbush) {
+              // Double ambush triggered - AI's turn ends after effects
+              state.ready = false;
+              // Wait for double ambush animations to complete (2000ms for shake)
+              setTimeout(() => {
+                if (!gameOver) {
+                  evaluateBoardStateAfterAuto();
+                  if (!gameOver) {
+                    processTurnResult(player);
+                  }
+                }
+              }, 2000);
+            } else {
+              statusElement.textContent = 'AI has seeded an ambush somewhere on the board!';
+            }
+          }
         }
         state.ambushAvailable = false;
       }
@@ -2905,6 +3016,32 @@
       }, 2000);
     }
 
+    function playDoubleAmbushEffects() {
+      // Use the same flash and shake as regular ambush, but show double ambush alert
+      if (ambushFlashElement) {
+        ambushFlashElement.classList.add('show');
+        if (ambushFlashTimeout) clearTimeout(ambushFlashTimeout);
+        ambushFlashTimeout = setTimeout(() => {
+          ambushFlashElement.classList.remove('show');
+          ambushFlashTimeout = null;
+        }, 1000);
+      }
+      if (doubleAmbushAlertElement) {
+        doubleAmbushAlertElement.classList.add('show');
+        if (doubleAmbushAlertTimeout) clearTimeout(doubleAmbushAlertTimeout);
+        doubleAmbushAlertTimeout = setTimeout(() => {
+          doubleAmbushAlertElement.classList.remove('show');
+          doubleAmbushAlertTimeout = null;
+        }, 1500);
+      }
+      document.body.classList.add('ambush-shake');
+      if (ambushShakeTimeout) clearTimeout(ambushShakeTimeout);
+      ambushShakeTimeout = setTimeout(() => {
+        document.body.classList.remove('ambush-shake');
+        ambushShakeTimeout = null;
+      }, 2000);
+    }
+
     function clearAmbushEffects() {
       if (ambushFlashTimeout) {
         clearTimeout(ambushFlashTimeout);
@@ -2918,8 +3055,13 @@
         clearTimeout(ambushShakeTimeout);
         ambushShakeTimeout = null;
       }
+      if (doubleAmbushAlertTimeout) {
+        clearTimeout(doubleAmbushAlertTimeout);
+        doubleAmbushAlertTimeout = null;
+      }
       ambushFlashElement?.classList.remove('show');
       ambushAlertElement?.classList.remove('show');
+      doubleAmbushAlertElement?.classList.remove('show');
       document.body.classList.remove('ambush-shake');
     }
 
