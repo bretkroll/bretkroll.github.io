@@ -900,9 +900,11 @@
       const winner = winnerInfo.player;
       statusElement.textContent = `Player ${winner} claims Round ${currentRound}!`;
       disableBoard();
-      showWinCelebration(winner);
       waitingForAI = false;
-      completeRound({ winner });
+      setTimeout(() => {
+        showWinCelebration(winner);
+        completeRound({ winner });
+      }, 2000);
     }
 
     function handleDraw(message) {
