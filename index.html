@@ -1969,9 +1969,32 @@
 
     function applyAISelection() {
       const state = playerState[AI];
-      if (!state || state.awaitingChoice === false) return;
+      if (!state || state.awaitingChoice === false) {
+        // Can't select a card, skip to manual placement
+        state.ready = true;
+        statusElement.textContent = 'AI is thinking...';
+        const aiMoveDelay = Math.round(randomDelay(1250, 1750));
+        setTimeout(() => {
+          if (!gameOver && currentPlayer === AI) {
+            aiMove();
+          }
+        }, aiMoveDelay);
+        return;
+      }
       const choices = state.choices || [];
-      if (!choices.length) return;
+      if (!choices.length) {
+        // No cards available, skip to manual placement
+        state.awaitingChoice = false;
+        state.ready = true;
+        statusElement.textContent = 'AI is thinking...';
+        const aiMoveDelay = Math.round(randomDelay(1250, 1750));
+        setTimeout(() => {
+          if (!gameOver && currentPlayer === AI) {
+            aiMove();
+          }
+        }, aiMoveDelay);
+        return;
+      }
       const selectedIndex = chooseBestAICardIndex(choices);
       handleCardSelection(AI, selectedIndex);
     }
