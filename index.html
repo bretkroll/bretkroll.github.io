@@ -1226,7 +1226,7 @@
         updateScoreDisplay();
         const playerLabel = nextStartingPlayer === HUMAN ? 'Player X' : 'AI';
         scheduleNextRound({
-          statusMessage: `Round ${currentRound}: ${playerLabel} goes first`,
+          statusMessage: `Round ${currentRound}: ${playerLabel} chooses Card`,
           startingPlayer: nextStartingPlayer,
           delay: nextRoundDelay
         });
@@ -1243,7 +1243,7 @@
         }
         const playerLabel = nextStartingPlayer === HUMAN ? 'Player X' : 'AI';
         scheduleNextRound({
-          statusMessage: `Draw. Round ${currentRound} rematch! ${playerLabel} goes first`,
+          statusMessage: `Draw. Round ${currentRound} rematch! ${playerLabel} chooses Card`,
           startingPlayer: nextStartingPlayer,
           delay: nextRoundDelay
         });
@@ -1277,7 +1277,7 @@
       campaignOverlayTimeout = setTimeout(() => {
         campaignOverlay?.classList?.remove('show');
         campaignOverlayTimeout = null;
-        resetRound(true, { statusMessage: 'Round 1: Player X goes first', resetCampaign: true });
+        resetRound(true, { statusMessage: 'Round 1: Player X chooses Card', resetCampaign: true });
       }, 3000);
     }
 
@@ -1426,7 +1426,7 @@
       roundResolved = false;
       waitingForAI = false;
       const playerLabel = startingPlayer === HUMAN ? 'Player X' : 'AI';
-      const message = options.statusMessage || `Round ${effectiveRound}: ${playerLabel} goes first`;
+      const message = options.statusMessage || `Round ${effectiveRound}: ${playerLabel} chooses Card`;
       statusElement.textContent = message;
       [...boardElement.children].forEach(btn => {
         btn.textContent = '';
@@ -1728,7 +1728,7 @@
       if (player === HUMAN) {
         renderCardChoices(player);
         waitingForAI = false;
-        statusElement.textContent = 'Player X goes first';
+        statusElement.textContent = 'Player X chooses Card';
         cardPanels.X?.panel?.classList?.add('selectable');
       } else {
         // Fade out text in human player's cards when AI's turn starts (left to right, 1 second total)
@@ -1756,7 +1756,7 @@
         // Generate choices for AI but don't render them
         generateCardChoices(player);
         waitingForAI = true;
-        statusElement.textContent = 'AI is drawing a card...';
+        statusElement.textContent = 'AI chooses Card';
         cardPanels.X?.panel?.classList?.remove('selectable');
         if (aiChoiceTimeout) clearTimeout(aiChoiceTimeout);
         const aiDrawDelay = Math.round(randomDelay(500, 1000));
@@ -3662,7 +3662,7 @@
 
     window.addEventListener('resize', updateTileScale);
 
-    resetRound(true, { statusMessage: 'Round 1: Player X goes first' });
+    resetRound(true, { statusMessage: 'Round 1: Player X chooses Card' });
   </script>
 
 </body>
